@@ -1,6 +1,6 @@
 # GradientBoostedFeatureEngineering
 
-Inspired by this (paper)[https://research.fb.com/wp-content/uploads/2016/11/practical-lessons-from-predicting-clicks-on-ads-at-facebook.pdf]
+Inspired by this [paper](https://research.fb.com/wp-content/uploads/2016/11/practical-lessons-from-predicting-clicks-on-ads-at-facebook.pdf)
 
 To run in its simplest form, throw in some `X`, `y` binary classification training data:
 `gbc_feat = GradientBoostedFeatureGenerator(X, y, nTrees=50)`
