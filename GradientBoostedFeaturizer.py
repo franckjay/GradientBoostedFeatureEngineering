@@ -1,9 +1,8 @@
 class GradientBoostedFeatureGenerator(object):
-    # TODO : Add in XGBoost/LightGBM instead of sklearn's GBC
     # TODO : Add in any learner, not necessarily LogReg ?
     # TODO : Enable enhanced functionality on the Train/Test split
-    # TODO : Finish a Polynomial feature builder
-    def __init__(self, X, y, nTrees=50, classification=True):
+    # TODO : Should you train GB and LR on the full dataset, or keep the split
+    def __init__(self, X, y, nTrees=50, classification=True, build_poly=False):
         """
         Initialize our tree builder with the number of trees needed,
         X and y data to be trained on. We then randomly split the data,
@@ -27,8 +26,10 @@ class GradientBoostedFeatureGenerator(object):
         # We do not want to try to make any predictions if the models are not trained
         self.lin_built = False
         self.tree_built = False
+        self.poly_built = False
         # Is our problem classification or regression?
         self.classification = classification
+        self.build_poly = build_poly
         # Set our maximum number of trees
         self.nTrees = nTrees
 
@@ -38,6 +39,10 @@ class GradientBoostedFeatureGenerator(object):
 
         self.X_train, self.X_test, self.y_train, self.y_test = X_train, X_test, y_train, y_test
 
+        if self.build_poly:
+            self._build_poly_features()
+
+        self.gb_features = self.X_train.columns
         # Build our GradBoost and LogReg
         self._train_feature_trees()
         self._train_feature_lin()
@@ -47,12 +52,13 @@ class GradientBoostedFeatureGenerator(object):
         Build our Gradient boosted model trained on
         a portion of the input data
         """
-        from sklearn.ensemble import GradientBoostingRegressor, GradientBoostingClassifier
+        # from sklearn.ensemble import GradientBoostingRegressor,GradientBoostingClassifier
+        import lightgbm as lgb
 
         if self.classification:
-            self.gb = GradientBoostingClassifier(n_estimators=self.nTrees)
+            self.gb = lgb.LGBMClassifier(n_estimators=self.nTrees)
         else:
-            self.gb = GradientBoostingRegressor(n_estimators=self.nTrees)
+            self.gb = lgb.LGBMRegressor(n_estimators=self.nTrees)
 
         self.gb.fit(self.X_train, self.y_train)
         self.tree_built = True
@@ -78,6 +84,9 @@ class GradientBoostedFeatureGenerator(object):
             # Train
             self.lin.fit(X_gen, self.y_test)
             self.lin_built = True
+            # What columns are we returning?
+            self.lin_feat_cols = X_gen.columns
+
         else:
             print("Error: You did not build a tree first")
 
@@ -86,7 +95,7 @@ class GradientBoostedFeatureGenerator(object):
 
     def _build_poly_features(self):
         """
-        Idea: Build a set of poly features, train a simple model (RF?),
+        Idea: Build a set of poly features, train a simple model,
             and then record top N of these features (10 perhaps?).
 
         Output: The top N features will then be saved and recreated for the
@@ -95,10 +104,24 @@ class GradientBoostedFeatureGenerator(object):
         On any large dataset, this breaks out in a `MemoryError`
 
         """
+        import lightgbm as lgb
 
-        from sklearn.preprocessing import PolynomialFeatures
-        poly = PolynomialFeatures(2)
-        poly.fit_transform(self.X_train)
+        if self.poly_built == False:
+            if self.classification:
+                gb = lgb.LGBMClassifier(n_estimators=10)
+            else:
+                gb = lgb.LGBMRegressor(n_estimators=10)
+
+        gb.fit(training_data[feature_names], training_data["target_kazutsugi"])
+        self.top_features = [feature_names[idx] for idx in np.argsort(gb.feature_importances_)[::-1][:5]]
+
+        for col1 in self.top_features:
+            for col2 in self.top_features:
+                if (col1 + "|" + col2 not in self.X_train.columns) and (col2 + "|" + col1 not in self.X_train.columns):
+                    self.X_train[col1 + "|" + col2] = self.X_train[col1] * self.X_train[col2]
+                    self.X_test[col1 + "|" + col2] = self.X_test[col1] * self.X_test[col2]
+
+        self.poly_built = True
 
     def build_features(self, X_raw):
         """
@@ -112,8 +135,13 @@ class GradientBoostedFeatureGenerator(object):
         """
         import pandas as pd
 
+        if self.build_poly:
+            for col1 in self.top_features:
+                for col2 in self.top_features:
+                    if (col1 + "|" + col2 not in X_raw.columns) and (col2 + "|" + col1 not in X_raw.columns):
+                        X_raw[col1 + "|" + col2] = X_raw[col1] * X_raw[col2]
         # This gives us a np.array() of each tree's leaf index output
-        leaf_node_output = self.gbc.apply(X_raw)
+        leaf_node_output = self.gb.predict(X_raw[self.gb_features], pred_leaf=True)
 
         # Returns the leaf indices for each tree
         leaf_df = pd.DataFrame(leaf_node_output[:, :],
@@ -123,13 +151,21 @@ class GradientBoostedFeatureGenerator(object):
         self.leaf_df = pd.get_dummies(leaf_df.astype('category'),
                                       prefix=["OHE_" + str(col) for col in leaf_df.columns])
 
+        # Sometimes the leaf indices never show up in the valid/test data, so fill with 0s
+        if self.lin_built:
+            for col in self.lin_feat_cols:
+                if col not in self.leaf_df.columns:
+                    self.leaf_df[col] = 0
+
+            # Return same order column
+            return self.leaf_df[self.lin_feat_cols]
         return self.leaf_df
 
     def build_predictions(self, X_input):
         """
-
+        Finally build our prediction set
         """
-        if self.tree_built and self.lin_reg_built:
+        if self.tree_built and self.lin_built:
             X_gen = self.build_features(X_input)
             # Either predict probabilities or real values
             if self.classification:
