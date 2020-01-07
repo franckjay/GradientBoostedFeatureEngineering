@@ -1,8 +1,7 @@
 class GradientBoostedFeatureGenerator(object):
-    # TODO : Add in XGBoost/LightGBM instead of sklearn's GBC
     # TODO : Add in any learner, not necessarily LogReg ?
     # TODO : Enable enhanced functionality on the Train/Test split
-    # TODO : Finish a Polynomial feature builder
+    # TODO : Should you train GB and LR on the full dataset, or keep the split
     def __init__(self, X, y, nTrees=50, classification=True, build_poly=False):
         """
         Initialize our tree builder with the number of trees needed,
@@ -19,6 +18,7 @@ class GradientBoostedFeatureGenerator(object):
         nTrees: int = Number of trees to build our solution upon
         classification: Bool = Is our target variable
         """
+        import numpy as np
         from sklearn.model_selection import train_test_split
 
         assert (len(X) == len(y))
@@ -33,7 +33,6 @@ class GradientBoostedFeatureGenerator(object):
         self.build_poly = build_poly
         # Set our maximum number of trees
         self.nTrees = nTrees
-        self.nLeaves = 50
 
         # 42: The answer to life, the universe, everything...
         X_train, X_test, y_train, y_test = train_test_split(
@@ -58,9 +57,9 @@ class GradientBoostedFeatureGenerator(object):
         import lightgbm as lgb
 
         if self.classification:
-            self.gb = lgb.LGBMClassifier(n_estimators=self.nTrees, num_leaves=self.nLeaves)
+            self.gb = lgb.LGBMClassifier(n_estimators=self.nTrees)
         else:
-            self.gb = lgb.LGBMRegressor(n_estimators=self.nTrees, num_leaves=self.nLeaves)
+            self.gb = lgb.LGBMRegressor(n_estimators=self.nTrees)
 
         self.gb.fit(self.X_train, self.y_train)
         self.tree_built = True
@@ -106,16 +105,17 @@ class GradientBoostedFeatureGenerator(object):
         On any large dataset, this breaks out in a `MemoryError`
 
         """
+        import numpy as np
         import lightgbm as lgb
 
         if self.poly_built == False:
             if self.classification:
-                gb = lgb.LGBMClassifier(n_estimators=10, num_leaves=self.nLeaves)
+                gb = lgb.LGBMClassifier(n_estimators=10)
             else:
-                gb = lgb.LGBMRegressor(n_estimators=10, num_leaves=self.nLeaves)
+                gb = lgb.LGBMRegressor(n_estimators=10)
 
-        gb.fit(training_data[feature_names], training_data["target_kazutsugi"])
-        self.top_features = [feature_names[idx] for idx in np.argsort(gb.feature_importances_)[::-1][:5]]
+        gb.fit(self.X_train, self.y_train)
+        self.top_features = [self.X_train.columns[idx] for idx in np.argsort(gb.feature_importances_)[::-1][:5]]
 
         for col1 in self.top_features:
             for col2 in self.top_features:
@@ -165,7 +165,7 @@ class GradientBoostedFeatureGenerator(object):
 
     def build_predictions(self, X_input):
         """
-
+        Finally build our prediction set
         """
         if self.tree_built and self.lin_built:
             X_gen = self.build_features(X_input)
