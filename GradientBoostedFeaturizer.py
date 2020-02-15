@@ -31,8 +31,9 @@ class GradientBoostedFeatureGenerator(object):
         # Is our problem classification or regression?
         self.classification = classification
         self.build_poly = build_poly
-        # Set our maximum number of trees
+        # Set our maximum number of trees + leaves
         self.nTrees = nTrees
+        self.nLeaves = 50  # Hardcoded at this time!
 
         # 42: The answer to life, the universe, everything...
         X_train, X_test, y_train, y_test = train_test_split(
@@ -57,9 +58,9 @@ class GradientBoostedFeatureGenerator(object):
         import lightgbm as lgb
 
         if self.classification:
-            self.gb = lgb.LGBMClassifier(n_estimators=self.nTrees)
+            self.gb = lgb.LGBMClassifier(n_estimators=self.nTrees, num_leaves=self.nLeaves)
         else:
-            self.gb = lgb.LGBMRegressor(n_estimators=self.nTrees)
+            self.gb = lgb.LGBMRegressor(n_estimators=self.nTrees, num_leaves=self.nLeaves)
 
         self.gb.fit(self.X_train, self.y_train)
         self.tree_built = True
@@ -125,10 +126,11 @@ class GradientBoostedFeatureGenerator(object):
 
         self.poly_built = True
 
-    def build_features(self, X_raw):
+    def build_features(self, X_raw, ohe=True):
         """
         From the GBC's output, we dump out the index of the leaf nodes
-        from each classifier
+        from each classifier as a OHE column (`ohe=True` by default). You can also
+        just dump out the leaf indices for each tree as a column
 
         INPUTS:
         ------
@@ -144,6 +146,11 @@ class GradientBoostedFeatureGenerator(object):
                         X_raw[col1 + "|" + col2] = X_raw[col1] * X_raw[col2]
         # This gives us a np.array() of each tree's leaf index output
         leaf_node_output = self.gb.predict(X_raw[self.gb_features], pred_leaf=True)
+
+        if not ohe:
+            # This just returns a NP array of nRows,nTrees with integer leaf indices
+            # Good if you are using these as categorical inputs for an embedding column
+            return leaf_node_output
 
         # Returns the leaf indices for each tree
         leaf_df = pd.DataFrame(leaf_node_output[:, :],
