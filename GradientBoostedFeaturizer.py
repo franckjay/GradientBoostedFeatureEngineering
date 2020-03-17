@@ -21,8 +21,8 @@ class GradientBoostedFeatureGenerator(object):
         import numpy as np
         from sklearn.model_selection import train_test_split
 
-        assert (len(X) == len(y))
-        assert (nTrees >= 0)
+        assert len(X) == len(y)
+        assert nTrees >= 0
 
         # We do not want to try to make any predictions if the models are not trained
         self.lin_built = False
@@ -37,9 +37,15 @@ class GradientBoostedFeatureGenerator(object):
 
         # 42: The answer to life, the universe, everything...
         X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=0.5, random_state=42)
+            X, y, test_size=0.5, random_state=42
+        )
 
-        self.X_train, self.X_test, self.y_train, self.y_test = X_train, X_test, y_train, y_test
+        self.X_train, self.X_test, self.y_train, self.y_test = (
+            X_train,
+            X_test,
+            y_train,
+            y_test,
+        )
 
         if self.build_poly:
             self._build_poly_features()
@@ -58,9 +64,13 @@ class GradientBoostedFeatureGenerator(object):
         import lightgbm as lgb
 
         if self.classification:
-            self.gb = lgb.LGBMClassifier(n_estimators=self.nTrees, num_leaves=self.nLeaves)
+            self.gb = lgb.LGBMClassifier(
+                n_estimators=self.nTrees, num_leaves=self.nLeaves
+            )
         else:
-            self.gb = lgb.LGBMRegressor(n_estimators=self.nTrees, num_leaves=self.nLeaves)
+            self.gb = lgb.LGBMRegressor(
+                n_estimators=self.nTrees, num_leaves=self.nLeaves
+            )
 
         self.gb.fit(self.X_train, self.y_train)
         self.tree_built = True
@@ -116,13 +126,22 @@ class GradientBoostedFeatureGenerator(object):
                 gb = lgb.LGBMRegressor(n_estimators=10)
 
         gb.fit(self.X_train, self.y_train)
-        self.top_features = [self.X_train.columns[idx] for idx in np.argsort(gb.feature_importances_)[::-1][:5]]
+        self.top_features = [
+            self.X_train.columns[idx]
+            for idx in np.argsort(gb.feature_importances_)[::-1][:5]
+        ]
 
         for col1 in self.top_features:
             for col2 in self.top_features:
-                if (col1 + "|" + col2 not in self.X_train.columns) and (col2 + "|" + col1 not in self.X_train.columns):
-                    self.X_train[col1 + "|" + col2] = self.X_train[col1] * self.X_train[col2]
-                    self.X_test[col1 + "|" + col2] = self.X_test[col1] * self.X_test[col2]
+                if (col1 + "|" + col2 not in self.X_train.columns) and (
+                    col2 + "|" + col1 not in self.X_train.columns
+                ):
+                    self.X_train[col1 + "|" + col2] = (
+                        self.X_train[col1] * self.X_train[col2]
+                    )
+                    self.X_test[col1 + "|" + col2] = (
+                        self.X_test[col1] * self.X_test[col2]
+                    )
 
         self.poly_built = True
 
@@ -142,7 +161,9 @@ class GradientBoostedFeatureGenerator(object):
         if self.build_poly:
             for col1 in self.top_features:
                 for col2 in self.top_features:
-                    if (col1 + "|" + col2 not in X_raw.columns) and (col2 + "|" + col1 not in X_raw.columns):
+                    if (col1 + "|" + col2 not in X_raw.columns) and (
+                        col2 + "|" + col1 not in X_raw.columns
+                    ):
                         X_raw[col1 + "|" + col2] = X_raw[col1] * X_raw[col2]
         # This gives us a np.array() of each tree's leaf index output
         leaf_node_output = self.gb.predict(X_raw[self.gb_features], pred_leaf=True)
@@ -153,12 +174,16 @@ class GradientBoostedFeatureGenerator(object):
             return leaf_node_output
 
         # Returns the leaf indices for each tree
-        leaf_df = pd.DataFrame(leaf_node_output[:, :],
-                               columns=["leaf_index_tree" + str(n) for n in range(self.nTrees)])
+        leaf_df = pd.DataFrame(
+            leaf_node_output[:, :],
+            columns=["leaf_index_tree" + str(n) for n in range(self.nTrees)],
+        )
 
         # Now we do a One-Hot of our leaf index to provide to our linear model
-        self.leaf_df = pd.get_dummies(leaf_df.astype('category'),
-                                      prefix=["OHE_" + str(col) for col in leaf_df.columns])
+        self.leaf_df = pd.get_dummies(
+            leaf_df.astype("category"),
+            prefix=["OHE_" + str(col) for col in leaf_df.columns],
+        )
 
         # Sometimes the leaf indices never show up in the valid/test data, so fill with 0s
         if self.lin_built:
