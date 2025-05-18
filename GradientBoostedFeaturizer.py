@@ -1,211 +1,223 @@
-class GradientBoostedFeatureGenerator(object):
-    # TODO : Add in any learner, not necessarily LogReg ?
-    # TODO : Enable enhanced functionality on the Train/Test split
-    # TODO : Should you train GB and LR on the full dataset, or keep the split
-    def __init__(self, X, y, nTrees=50, classification=True, build_poly=False):
+from typing import Optional, Union, List, Tuple
+import numpy as np
+import pandas as pd
+from sklearn.model_selection import train_test_split
+from sklearn.linear_model import LinearRegression, LogisticRegression
+import lightgbm as lgb
+
+class GradientBoostedFeatureGenerator:
+    """
+    A feature generator that uses gradient boosting trees to create new features
+    for a linear model. This approach combines the power of tree-based models
+    with the interpretability of linear models.
+    
+    The process works as follows:
+    1. Split data into train/test sets
+    2. Train a gradient boosting model on the training set
+    3. Use the leaf indices from the trees as new features
+    4. Train a linear model on these new features
+    
+    Attributes:
+        n_trees (int): Number of trees in the gradient boosting model
+        n_leaves (int): Maximum number of leaves per tree
+        classification (bool): Whether this is a classification task
+        build_poly (bool): Whether to build polynomial features
+    """
+    
+    def __init__(
+        self,
+        X: pd.DataFrame,
+        y: np.ndarray,
+        n_trees: int = 50,
+        classification: bool = True,
+        build_poly: bool = False,
+        random_state: int = 42
+    ) -> None:
         """
-        Initialize our tree builder with the number of trees needed,
-        X and y data to be trained on. We then randomly split the data,
-        train the GradientBooster and Linear models.
-
-        The data input should be transformed already (e.g., scaling, encoding, ...)
-
-        INPUTS:
-        ------
-
-        X : np.array() = Training features
-        y : np.array() = Binary, 1-dimensional target vector
-        nTrees: int = Number of trees to build our solution upon
-        classification: Bool = Is our target variable
+        Initialize the feature generator.
+        
+        Args:
+            X: Training features as a pandas DataFrame
+            y: Target values as a numpy array
+            n_trees: Number of trees to build
+            classification: Whether this is a classification task
+            build_poly: Whether to build polynomial features
+            random_state: Random seed for reproducibility
         """
-        import numpy as np
-        from sklearn.model_selection import train_test_split
-
-        assert len(X) == len(y)
-        assert nTrees >= 0
-
-        # We do not want to try to make any predictions if the models are not trained
+        self._validate_inputs(X, y, n_trees)
+        
+        # Initialize state flags
         self.lin_built = False
         self.tree_built = False
         self.poly_built = False
-        # Is our problem classification or regression?
+        
+        # Store configuration
         self.classification = classification
         self.build_poly = build_poly
-        # Set our maximum number of trees + leaves
-        self.nTrees = nTrees
-        self.nLeaves = 50  # Hardcoded at this time!
-
-        # 42: The answer to life, the universe, everything...
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=0.5, random_state=42
+        self.n_trees = n_trees
+        self.n_leaves = 50  # TODO: Make this configurable
+        
+        # Split the data
+        self.X_train, self.X_test, self.y_train, self.y_test = train_test_split(
+            X, y, test_size=0.5, random_state=random_state
         )
-
-        self.X_train, self.X_test, self.y_train, self.y_test = (
-            X_train,
-            X_test,
-            y_train,
-            y_test,
-        )
-
+        
+        # Store original feature names
+        self.gb_features = self.X_train.columns
+        
+        # Build features and train models
         if self.build_poly:
             self._build_poly_features()
-
-        self.gb_features = self.X_train.columns
-        # Build our GradBoost and LogReg
+            
         self._train_feature_trees()
         self._train_feature_lin()
-
-    def _train_feature_trees(self):
+    
+    @staticmethod
+    def _validate_inputs(X: pd.DataFrame, y: np.ndarray, n_trees: int) -> None:
+        """Validate input parameters."""
+        if not isinstance(X, pd.DataFrame):
+            raise TypeError("X must be a pandas DataFrame")
+        if not isinstance(y, np.ndarray):
+            raise TypeError("y must be a numpy array")
+        if len(X) != len(y):
+            raise ValueError("X and y must have the same length")
+        if n_trees < 1:
+            raise ValueError("n_trees must be positive")
+    
+    def _train_feature_trees(self) -> lgb.LGBMClassifier | lgb.LGBMRegressor:
         """
-        Build our Gradient boosted model trained on
-        a portion of the input data
+        Train the gradient boosting model on the training set.
+        
+        Returns:
+            The trained gradient boosting model
         """
-        # from sklearn.ensemble import GradientBoostingRegressor,GradientBoostingClassifier
-        import lightgbm as lgb
-
-        if self.classification:
-            self.gb = lgb.LGBMClassifier(
-                n_estimators=self.nTrees, num_leaves=self.nLeaves
-            )
-        else:
-            self.gb = lgb.LGBMRegressor(
-                n_estimators=self.nTrees, num_leaves=self.nLeaves
-            )
-
+        model_class = lgb.LGBMClassifier if self.classification else lgb.LGBMRegressor
+        self.gb = model_class(
+            n_estimators=self.n_trees,
+            num_leaves=self.n_leaves
+        )
+        
         self.gb.fit(self.X_train, self.y_train)
         self.tree_built = True
-        # If the user wants, you can get the trained tree
         return self.gb
-
-    def _train_feature_lin(self):
+    
+    def _train_feature_lin(self) -> Union[LogisticRegression, LinearRegression]:
         """
-        Build our Linear on the remaining fraction of the input data.
-        First, the features are generated
+        Train the linear model on the generated features.
+        
+        Returns:
+            The trained linear model
         """
-        from sklearn.linear_model import LinearRegression, LogisticRegression
-
-        # Instantiate a linear model
-        if self.classification:
-            self.lin = LogisticRegression(solver="lbfgs")
-        else:
-            self.lin = LinearRegression()
-
-        # Build our features from the tree
-        if self.tree_built:
-            X_gen = self.build_features(self.X_test)
-            # Train
-            self.lin.fit(X_gen, self.y_test)
-            self.lin_built = True
-            # What columns are we returning?
-            self.lin_feat_cols = X_gen.columns
-
-        else:
-            print("Error: You did not build a tree first")
-
-        # If the user wants, you can get the trained linear model
+        if not self.tree_built:
+            raise RuntimeError("Must train tree model before linear model")
+            
+        model_class = LogisticRegression if self.classification else LinearRegression
+        self.lin = model_class(solver="lbfgs")
+        
+        X_gen = self.build_features(self.X_test)
+        self.lin.fit(X_gen, self.y_test)
+        self.lin_built = True
+        self.lin_feat_cols = X_gen.columns
+        
         return self.lin
-
-    def _build_poly_features(self):
+    
+    def _build_poly_features(self) -> None:
         """
-        Idea: Build a set of poly features, train a simple model,
-            and then record top N of these features (10 perhaps?).
-
-        Output: The top N features will then be saved and recreated for the
-                main training dataset with the Gradient Booster.
-
-        On any large dataset, this breaks out in a `MemoryError`
-
+        Build polynomial features from the top most important features
+        identified by a quick gradient boosting model.
         """
-        import numpy as np
-        import lightgbm as lgb
-
-        if self.poly_built == False:
-            if self.classification:
-                gb = lgb.LGBMClassifier(n_estimators=10)
-            else:
-                gb = lgb.LGBMRegressor(n_estimators=10)
-
+        if self.poly_built:
+            return
+            
+        # Train a quick model to identify important features
+        model_class = lgb.LGBMClassifier if self.classification else lgb.LGBMRegressor
+        gb = model_class(n_estimators=10)
         gb.fit(self.X_train, self.y_train)
+        
+        # Get top 5 most important features
         self.top_features = [
             self.X_train.columns[idx]
             for idx in np.argsort(gb.feature_importances_)[::-1][:5]
         ]
-
+        
+        # Create polynomial features
         for col1 in self.top_features:
             for col2 in self.top_features:
-                if (col1 + "|" + col2 not in self.X_train.columns) and (
-                    col2 + "|" + col1 not in self.X_train.columns
-                ):
-                    self.X_train[col1 + "|" + col2] = (
-                        self.X_train[col1] * self.X_train[col2]
-                    )
-                    self.X_test[col1 + "|" + col2] = (
-                        self.X_test[col1] * self.X_test[col2]
-                    )
-
+                feature_name = f"{col1}|{col2}"
+                if feature_name not in self.X_train.columns:
+                    self.X_train[feature_name] = self.X_train[col1] * self.X_train[col2]
+                    self.X_test[feature_name] = self.X_test[col1] * self.X_test[col2]
+        
         self.poly_built = True
-
-    def build_features(self, X_raw, ohe=True):
+    
+    def build_features(
+        self,
+        X_raw: pd.DataFrame,
+        ohe: bool = True
+    ) -> pd.DataFrame:
         """
-        From the GBC's output, we dump out the index of the leaf nodes
-        from each classifier as a OHE column (`ohe=True` by default). You can also
-        just dump out the leaf indices for each tree as a column
-
-        INPUTS:
-        ------
-        X_raw: np.array() = Array of the same features as `X`, but new data
-
+        Generate features from the gradient boosting model.
+        
+        Args:
+            X_raw: Input features to generate new features from
+            ohe: Whether to one-hot encode the leaf indices
+            
+        Returns:
+            DataFrame containing the generated features
         """
-        import pandas as pd
-
         if self.build_poly:
-            for col1 in self.top_features:
-                for col2 in self.top_features:
-                    if (col1 + "|" + col2 not in X_raw.columns) and (
-                        col2 + "|" + col1 not in X_raw.columns
-                    ):
-                        X_raw[col1 + "|" + col2] = X_raw[col1] * X_raw[col2]
-        # This gives us a np.array() of each tree's leaf index output
+            self._add_poly_features(X_raw)
+            
+        # Get leaf indices from the gradient boosting model
         leaf_node_output = self.gb.predict(X_raw[self.gb_features], pred_leaf=True)
-
+        
         if not ohe:
-            # This just returns a NP array of nRows,nTrees with integer leaf indices
-            # Good if you are using these as categorical inputs for an embedding column
             return leaf_node_output
-
-        # Returns the leaf indices for each tree
+            
+        # Create DataFrame of leaf indices
         leaf_df = pd.DataFrame(
-            leaf_node_output[:, :],
-            columns=["leaf_index_tree" + str(n) for n in range(self.nTrees)],
+            leaf_node_output,
+            columns=[f"leaf_index_tree{n}" for n in range(self.n_trees)]
         )
-
-        # Now we do a One-Hot of our leaf index to provide to our linear model
+        
+        # One-hot encode the leaf indices
         self.leaf_df = pd.get_dummies(
             leaf_df.astype("category"),
-            prefix=["OHE_" + str(col) for col in leaf_df.columns],
+            prefix=[f"OHE_{col}" for col in leaf_df.columns]
         )
-
-        # Sometimes the leaf indices never show up in the valid/test data, so fill with 0s
+        
+        # Handle missing columns in validation/test data
         if self.lin_built:
             for col in self.lin_feat_cols:
                 if col not in self.leaf_df.columns:
                     self.leaf_df[col] = 0
-
-            # Return same order column
             return self.leaf_df[self.lin_feat_cols]
+            
         return self.leaf_df
-
-    def build_predictions(self, X_input):
+    
+    def _add_poly_features(self, X_raw: pd.DataFrame) -> None:
+        """Add polynomial features to the input DataFrame."""
+        for col1 in self.top_features:
+            for col2 in self.top_features:
+                feature_name = f"{col1}|{col2}"
+                if feature_name not in X_raw.columns:
+                    X_raw[feature_name] = X_raw[col1] * X_raw[col2]
+    
+    def build_predictions(self, X_input: pd.DataFrame) -> np.ndarray:
         """
-        Finally build our prediction set
+        Generate predictions using the trained models.
+        
+        Args:
+            X_input: Input features to generate predictions for
+            
+        Returns:
+            Array of predictions
         """
-        if self.tree_built and self.lin_built:
-            X_gen = self.build_features(X_input)
-            # Either predict probabilities or real values
-            if self.classification:
-                y_prob = self.lin.predict_proba(X_gen)
-            else:
-                y_prob = self.lin.predict(X_gen)
-
-        # Return the scores
-        return y_prob
+        if not (self.tree_built and self.lin_built):
+            raise RuntimeError("Models must be trained before making predictions")
+            
+        X_gen = self.build_features(X_input)
+        
+        if self.classification:
+            return self.lin.predict_proba(X_gen)
+        return self.lin.predict(X_gen)
